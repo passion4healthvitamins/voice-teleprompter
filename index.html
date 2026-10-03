@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Voice Teleprompter</title>
+<style>
+/* Layout: a quiet setup desk (script + a few dials) that gives way to a black stage with one reading line. */
+:root{
+  color-scheme:dark;
+  --bg:#101214; --panel:#191c20; --line:#2b3037; --fg:#eef0f2; --muted:#98a1ab;
+  --accent:#ffc857; --accent-ink:#231a00; --ok:#6fd08c; --warn:#ff8a65;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 var(--sans)}
+[hidden]{display:none!important}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- setup ---------- */
+#setup{max-width:860px;margin:0 auto;padding-block:32px 48px;padding-inline:16px;display:flex;flex-direction:column;gap:20px}
+h1{font-size:26px;line-height:1.2;margin:0;letter-spacing:-.01em}
+.lede{color:var(--muted);margin:0;max-width:62ch}
+textarea{width:100%;min-height:300px;resize:vertical;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;font-size:17px;line-height:1.6}
+.meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:14px;font-variant-numeric:tabular-nums}
+.dials{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
+.dial{display:flex;flex-direction:column;gap:6px;min-width:0}
+.dial label,.dial .lab{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+select,input[type=number]{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;width:100%}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{flex:1;background:var(--panel);border:0;padding:10px 8px;cursor:pointer;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.seg button:disabled{opacity:.45;cursor:not-allowed}
+.check{display:flex;align-items:center;gap:10px;padding:10px 0}
+.check input{width:18px;height:18px;accent-color:var(--accent)}
+.go{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+#start{background:var(--accent);color:var(--accent-ink);border:0;border-radius:10px;padding:14px 28px;font-weight:700;font-size:17px;cursor:pointer}
+#start:hover{filter:brightness(1.07)}
+.note{color:var(--muted);font-size:14px;margin:0;max-width:62ch}
+.note.warn{color:var(--warn)}
+kbd{font:12px var(--mono);border:1px solid var(--line);border-radius:4px;padding:1px 5px;background:var(--panel)}
+
+#micDot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}
+#micDot.ok{background:var(--ok)}
+#micDot.err{background:var(--warn)}
+#micBtn{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer}
+#gate{position:fixed;inset:0;z-index:5;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+#gateBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:460px;width:100%;display:flex;flex-direction:column;gap:14px}
+#gateBox h2{margin:0;font-size:20px}
+#gateBox p,#gateBox ol{margin:0;color:var(--muted)}
+#gateBox ol{padding-left:20px;display:flex;flex-direction:column;gap:6px}
+#gateAsk{background:var(--accent);color:var(--accent-ink);border:0;border-radius:10px;padding:14px 22px;font-weight:700;cursor:pointer;min-height:48px}
+#gateSkip{background:transparent;border:1px solid var(--line);border-radius:10px;padding:14px 18px;cursor:pointer;min-height:48px}
+#micBtn{min-height:44px}
+/* ---------- stage ---------- */
+#stage{position:fixed;inset:0;background:#000;color:#fff;display:flex;flex-direction:column;overflow:hidden}
+#view{position:relative;flex:1;overflow:hidden}
+#view.mirror{transform:scaleX(-1)}
+#roll{position:absolute;left:0;right:0;top:0;padding:0 max(24px,7vw);will-change:transform;font-weight:600;line-height:1.35;letter-spacing:-.005em}
+#roll p{margin:0 0 .9em}
+#roll span{cursor:pointer;transition:color .25s,opacity .25s}
+#roll span.said{opacity:.32}
+#roll span.now{color:var(--accent)}
+#guide{position:absolute;left:0;right:0;top:36%;height:0;border-top:1px solid rgba(255,200,87,.35);pointer-events:none}
+#guide::before{content:"";position:absolute;left:6px;top:-9px;border:9px solid transparent;border-left-color:var(--accent)}
+#fade{position:absolute;inset:0;pointer-events:none;background:linear-gradient(#000 0,transparent 16%,transparent 78%,#000 100%)}
+#bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));background:#0b0c0e;border-top:1px solid #1e2227;font-size:14px}
+#bar button{background:#1b1f24;border:1px solid #2b3037;color:#eef0f2;border-radius:8px;padding:8px 12px;cursor:pointer;min-width:40px}
+#bar button:hover{background:#262b32}
+#status{display:flex;align-items:center;gap:8px;margin-right:auto;min-width:0;flex:1 1 220px}
+#dot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}
+#dot.live{background:var(--ok);animation:pulse 1.4s infinite}
+#dot.err{background:var(--warn)}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){#dot.live{animation:none}}
+#heard{color:#98a1ab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#pace{font-variant-numeric:tabular-nums;padding:6px 10px;border-radius:999px;border:1px solid #2b3037;white-space:nowrap}
+#pace.ok{color:var(--ok);border-color:var(--ok)}
+#pace.off{color:var(--warn);border-color:var(--warn)}
+#prog{height:3px;background:#1e2227}
+#prog i{display:block;height:100%;width:0;background:var(--accent)}
+</style>
+</head>
+<body>
+
+<main id="setup">
+  <h1>Voice Teleprompter</h1>
+  <p class="lede">Paste your script, press Start, and read out loud. The text moves only as fast as you speak: pause and it waits, skip ahead and it catches up.</p>
+
+  <textarea id="script" spellcheck="false" aria-label="Script"></textarea>
+  <div class="meta"><span id="count"></span><span id="saved">Your script is saved in this browser.</span></div>
+
+  <div class="dials">
+    <div class="dial">
+      <span class="lab">Scrolling</span>
+      <div class="seg" role="group" aria-label="Scrolling mode">
+        <button type="button" id="mVoice" aria-pressed="true">Follow my voice</button>
+        <button type="button" id="mFixed" aria-pressed="false">Fixed speed</button>
+      </div>
+    </div>
+    <div class="dial">
+      <label for="lang">Script language</label>
+      <select id="lang">
+        <option value="en-US">English (US)</option>
+        <option value="en-GB">English (UK)</option>
+        <option value="es-MX">Español (México)</option>
+        <option value="es-ES">Español (España)</option>
+        <option value="es-US">Español (EE. UU.)</option>
+        <option value="fr-FR">Français</option>
+        <option value="de-DE">Deutsch</option>
+        <option value="pt-BR">Português (Brasil)</option>
+        <option value="it-IT">Italiano</option>
+        <option value="ja-JP">日本語</option>
+      </select>
+    </div>
+    <div class="dial">
+      <label for="wpm">Target pace (words/min)</label>
+      <input id="wpm" type="number" min="60" max="260" step="5" value="150">
+    </div>
+    <div class="dial">
+      <label for="size">Text size</label>
+      <select id="size">
+        <option value="5">Medium</option>
+        <option value="6.5" selected>Large</option>
+        <option value="8.5">Extra large</option>
+      </select>
+    </div>
+    <div class="dial">
+      <span class="lab">Glass rig</span>
+      <label class="check"><input id="mirror" type="checkbox"> Mirror the text</label>
+    </div>
+  </div>
+
+  <div class="go">
+    <button id="start" type="button">Start</button>
+    <p class="note">In the prompter: <kbd>Space</kbd> pause · <kbd>↑</kbd><kbd>↓</kbd> nudge · <kbd>+</kbd><kbd>−</kbd> text size · click any word to jump there · <kbd>Esc</kbd> leave</p>
+  </div>
+  <div class="go" id="micRow" hidden>
+    <span id="micDot"></span><p class="note" id="micMsg"></p>
+    <button id="micBtn" type="button" hidden>Allow microphone</button>
+  </div>
+  <p class="note" id="support"></p>
+</main>
+
+<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gateT" hidden>
+  <div id="gateBox">
+    <h2 id="gateT">Turn on the microphone</h2>
+    <p id="gateMsg"></p>
+    <ol id="gateSteps"></ol>
+    <div class="go">
+      <button id="gateAsk" type="button">Ask again</button>
+      <button id="gateSkip" type="button">Use fixed speed instead</button>
+    </div>
+  </div>
+</div>
+
+<section id="stage" hidden>
+  <div id="view">
+    <div id="roll"></div>
+    <div id="fade"></div>
+    <div id="guide"></div>
+  </div>
+  <div id="prog"><i></i></div>
+  <div id="bar">
+    <div id="status"><span id="dot"></span><span id="heard">Starting…</span></div>
+    <span id="pace">— wpm</span>
+    <button id="bPause" type="button">Pause</button>
+    <button id="bBack" type="button" title="Back one line">↑</button>
+    <button id="bFwd" type="button" title="Forward one line">↓</button>
+    <button id="bSmall" type="button" title="Smaller text">A−</button>
+    <button id="bBig" type="button" title="Larger text">A+</button>
+    <button id="bTop" type="button">Restart</button>
+    <button id="bFull" type="button">Full screen</button>
+    <button id="bExit" type="button">Exit</button>
+  </div>
+</section>
+
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id)};
+var SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+var SAMPLE="Welcome to your teleprompter. This is sample text, so replace it with your own script.\n\nRead this out loud at your natural pace. The highlighted word shows where you are, and the text only moves when you do.\n\nIf you stop to take a breath, the script waits for you. If you skip a sentence, it finds you again within a few words.\n\nThe pace reading at the bottom tells you whether you are speaking slower or faster than your target, so you can adjust while you record.";
+
+var el={script:$("script"),lang:$("lang"),wpm:$("wpm"),size:$("size"),mirror:$("mirror"),
+  stage:$("stage"),view:$("view"),roll:$("roll"),heard:$("heard"),dot:$("dot"),pace:$("pace"),prog:$("prog").firstElementChild};
+var mode="voice";
+
+/* ---------- persistence (per browser, best effort) ---------- */
+function load(k,d){try{var v=localStorage.getItem("tp."+k);return v===null?d:v}catch(e){return d}}
+function save(k,v){try{localStorage.setItem("tp."+k,v)}catch(e){$("saved").textContent="This browser is not saving the script. Keep a copy."}}
+el.script.value=load("script",SAMPLE);
+el.lang.value=load("lang",(navigator.language||"").indexOf("es")===0?"es-MX":"en-US")||"en-US";
+if(!el.lang.value)el.lang.value="en-US";
+el.wpm.value=load("wpm","150"); el.size.value=load("size","6.5"); if(!el.size.value)el.size.value="6.5";
+el.mirror.checked=load("mirror","0")==="1";
+mode=load("mode","voice");
+
+function norm(w){return w.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9À-￿]/g,"")}
+function wordsOf(t){return t.split(/\s+/).filter(Boolean)}
+function target(){var n=parseInt(el.wpm.value,10);return isNaN(n)?150:Math.min(260,Math.max(60,n))}
+function refreshCount(){
+  var n=wordsOf(el.script.value).length, s=Math.round(n/target()*60);
+  $("count").textContent=n+" words · about "+Math.floor(s/60)+" min "+("0"+s%60).slice(-2)+" s at "+target()+" wpm";
+}
+function setMode(m){
+  mode=(m==="voice"&&SR)?"voice":"fixed";
+  $("mVoice").setAttribute("aria-pressed",mode==="voice");
+  $("mFixed").setAttribute("aria-pressed",mode==="fixed");
+  save("mode",mode);
+}
+if(!SR){
+  $("mVoice").disabled=true;
+  $("support").className="note warn";
+  $("support").textContent="This browser has no speech recognition, so only Fixed speed is available. Open this file in Chrome, Edge or Safari to use voice following.";
+}else{
+  $("support").textContent="Voice following uses your browser's speech recognition. In Chrome and Edge that sends microphone audio to the browser vendor's speech service, so it needs an internet connection. Allow the microphone when asked.";
+}
+setMode(mode); refreshCount();
+el.script.addEventListener("input",function(){save("script",el.script.value);refreshCount()});
+el.wpm.addEventListener("input",function(){save("wpm",el.wpm.value);refreshCount()});
+el.lang.addEventListener("change",function(){save("lang",el.lang.value)});
+el.size.addEventListener("change",function(){save("size",el.size.value)});
+el.mirror.addEventListener("change",function(){save("mirror",el.mirror.checked?"1":"0")});
+$("mVoice").addEventListener("click",function(){setMode("voice")});
+$("mFixed").addEventListener("click",function(){setMode("fixed")});
+
+/* ---------- microphone permission: asked on open, re-asked from a button if declined ---------- */
+var micOK=false, UA=navigator.userAgent||"";
+var isIOS=/iPad|iPhone|iPod/.test(UA)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+var isAndroid=/Android/i.test(UA);
+function micState(cls,msg,btn){$("micRow").hidden=false;$("micDot").className=cls;$("micMsg").textContent=msg;$("micBtn").hidden=!btn}
+function micReady(){micOK=true;$("gate").hidden=true;micState("ok","Microphone allowed. Press Start when you are ready.",false)}
+function steps(){
+  if(isIOS)return["Tap the aA or page-settings icon in the address bar, then Website Settings.","Set Microphone to Allow.","If it is still blocked: iPhone Settings, then Apps, then Safari (or your browser), then Microphone, and choose Ask or Allow.","Come back here and tap Ask again."];
+  if(isAndroid)return["Tap the icon at the left of the address bar, then Permissions.","Turn Microphone on.","If it is still blocked: Android Settings, then Apps, then your browser, then Permissions, then Microphone, and allow it.","Come back here and tap Ask again."];
+  return["Click the icon at the left of the address bar.","Set Microphone to Allow.","Click Ask again. Reload the page if the browser asks you to."];
+}
+function showGate(msg,list){
+  $("gateMsg").textContent=msg;
+  var ol=$("gateSteps"); ol.textContent="";
+  (list||[]).forEach(function(t){var li=document.createElement("li");li.textContent=t;ol.appendChild(li)});
+  ol.hidden=!(list&&list.length);
+  $("gate").hidden=false; $("gateAsk").focus();
+}
+function framed(){
+  var inFrame=false; try{inFrame=window.self!==window.top}catch(e){inFrame=true}
+  var pol=document.permissionsPolicy||document.featurePolicy, off=false;
+  try{off=!!(pol&&pol.allowsFeature&&!pol.allowsFeature("microphone"))}catch(e){}
+  return inFrame||off;
+}
+function askMic(){
+  if(framed()){
+    micOK=false;
+    micState("err","This is a preview window, and previews cannot use the microphone.",true);
+    showGate("This page is open inside a preview (for example inside a chat or file viewer), where the browser refuses the microphone without asking. Open the page in its own Chrome, Edge or Safari tab from an https address, then tap Ask again.",[]);
+    return;
+  }
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    micOK=false;
+    micState("err","The microphone is not available from this address. Phones and tablets only allow it on a page served over https.",true);
+    showGate("This page cannot reach the microphone from where it was opened. On a phone or tablet the page has to be opened from an https web address, not from a downloaded file.",[]);
+    return;
+  }
+  micState("","Asking for the microphone. Choose Allow in the browser prompt.",false);
+  var t0=Date.now();
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(st){
+    st.getTracks().forEach(function(t){t.stop()});
+    micReady();
+  }).catch(function(e){
+    var n=e&&e.name; micOK=false;
+    if(n==="NotFoundError"||n==="DevicesNotFoundError"){
+      micState("err","No microphone found.",true);
+      showGate("No microphone was found on this device. Connect one, then ask again.",[]);
+    }else if(n==="NotAllowedError"||n==="SecurityError"){
+      micState("err","Microphone declined. Voice following needs it.",true);
+      /* an instant refusal means the browser has stopped asking and the setting must be changed by hand */
+      var blocked=Date.now()-t0<400;
+      showGate(blocked?"The browser is blocking the microphone for this page, so it will not ask again until you change the setting:":"The microphone was declined. Voice following cannot hear you without it. Tap Ask again and choose Allow. If no prompt appears:",steps());
+    }else{
+      micState("err","The microphone could not be opened.",true);
+      showGate("The microphone could not be opened. Close other apps that are using it, then ask again.",[]);
+    }
+  });
+}
+if(SR){
+  $("micBtn").addEventListener("click",askMic);
+  $("gateAsk").addEventListener("click",askMic);
+  $("gateSkip").addEventListener("click",function(){$("gate").hidden=true;setMode("fixed")});
+  var q=null; try{q=navigator.permissions&&navigator.permissions.query({name:"microphone"})}catch(e){}
+  if(q&&q.then)q.then(function(r){
+    if(r.state==="granted")micReady(); else askMic();
+    r.onchange=function(){if(r.state==="granted")micReady(); else if(r.state==="denied"){micOK=false;micState("err","Microphone declined. Voice following needs it.",true)}};
+  }).catch(askMic); else askMic();
+}
+
+/* ---------- prompter state ---------- */
+var spans=[], M=[], pos=0, shown=-1, y=0, active=false, paused=false, raf=0, last=0;
+var rec=null, finalTail=[], samples=[], fontVw=6.5, lock=null, micDead=false;
+
+function build(){
+  el.roll.textContent=""; spans=[]; M=[];
+  el.script.value.split(/\n+/).forEach(function(line){
+    var ws=wordsOf(line); if(!ws.length)return;
+    var p=document.createElement("p");
+    ws.forEach(function(w){
+      var s=document.createElement("span"); s.textContent=w; p.appendChild(s); p.appendChild(document.createTextNode(" "));
+      var n=norm(w); if(n){s.dataset.m=M.length; M.push({n:n,s:s})}
+      spans.push(s);
+    });
+    el.roll.appendChild(p);
+  });
+}
+function applyFont(){el.roll.style.fontSize="clamp(22px,"+fontVw+"vw,"+(fontVw*17)+"px)"}
+function lineY(){return el.view.clientHeight*0.36}
+
+function paint(){
+  var i=Math.min(M.length-1,Math.floor(pos));
+  if(i===shown)return;
+  var a=Math.min(i,shown), b=Math.max(i,shown), k;
+  for(k=Math.max(0,a);k<=b&&k<M.length;k++){M[k].s.classList.toggle("said",k<i);M[k].s.classList.remove("now")}
+  if(M[i]&&pos<M.length)M[i].s.classList.add("now");
+  shown=i;
+  el.prog.style.width=(M.length?Math.min(100,pos/M.length*100):0)+"%";
+}
+function targetY(){
+  if(!M.length)return 0;
+  var i=Math.min(M.length-1,Math.floor(pos)), s=M[i].s, c=s.offsetTop+s.offsetHeight/2;
+  if(mode==="fixed"&&i+1<M.length){ /* glide between lines instead of stepping */
+    var n=M[i+1].s, c2=n.offsetTop+n.offsetHeight/2; c+=(c2-c)*(pos-i);
+  }
+  return lineY()-c;
+}
+function frame(t){
+  if(!active)return;
+  var dt=Math.min(.1,(t-last)/1000||0); last=t;
+  if(mode==="fixed"&&!paused&&pos<M.length){pos=Math.min(M.length,pos+target()/60*dt)}
+  paint();
+  var ty=targetY();
+  y+=(ty-y)*Math.min(1,dt*(mode==="fixed"?10:4.5));
+  el.roll.style.transform="translateY("+y.toFixed(1)+"px)";
+  if(pos>=M.length&&M.length){setStatus("End of script.","")}
+  raf=requestAnimationFrame(frame);
+}
+
+/* ---------- pace ---------- */
+function paceTick(){
+  if(!active)return;
+  var now=Date.now(), tg=target();
+  if(mode==="fixed"){el.pace.className="";el.pace.textContent=tg+" wpm fixed";return}
+  samples.push({t:now,p:pos});
+  while(samples.length&&now-samples[0].t>9000)samples.shift();
+  var f=samples[0], span=(now-f.t)/1000;
+  if(paused||span<3||pos-f.p<2){el.pace.className="";el.pace.textContent="— wpm · target "+tg;return}
+  var w=Math.round((pos-f.p)/span*60), r=w/tg;
+  el.pace.className=(r<.85||r>1.15)?"off":"ok";
+  el.pace.textContent=w+" wpm · "+(r<.85?"speed up":r>1.15?"slow down":"on pace");
+}
+setInterval(paceTick,700);
+
+/* ---------- voice following ---------- */
+function lev1(a,b){ /* true when a and b differ by at most one edit */
+  var la=a.length, lb=b.length; if(Math.abs(la-lb)>1)return false;
+  var i=0,j=0,e=0;
+  while(i<la&&j<lb){
+    if(a[i]===b[j]){i++;j++;continue}
+    if(++e>1)return false;
+    if(la>lb)i++; else if(lb>la)j++; else{i++;j++}
+  }
+  return e+(la-i)+(lb-j)<=1;
+}
+function same(a,b){
+  if(a===b)return true;
+  if(a.length<4||b.length<4)return false;
+  return lev1(a,b)||a.indexOf(b)===0||b.indexOf(a)===0;
+}
+function follow(tail){
+  if(!tail.length||!M.length)return;
+  var p=Math.floor(pos), L=tail.length-1, best=-1, bs=0, bd=1e9;
+  var lo=Math.max(0,p-2), hi=Math.min(M.length-1,p+45);
+  for(var j=lo;j<=hi;j++){
+    if(!same(M[j].n,tail[L]))continue;
+    var sc=1; while(sc<=L&&j-sc>=0&&same(M[j-sc].n,tail[L-sc]))sc++;
+    var d=Math.abs(j-p);
+    if(d>3&&sc<2)continue;      /* a lone word only counts right where we are */
+    if(d>12&&sc<3)continue;     /* a jump needs a longer matching run */
+    if(sc>bs||(sc===bs&&d<bd)){best=j;bs=sc;bd=d}
+  }
+  if(best>=0&&best+1>pos)pos=best+1;
+}
+function setStatus(text,cls){el.heard.textContent=text;el.dot.className=cls||""}
+function startRec(){
+  if(!SR||mode!=="voice"||micDead)return;
+  try{
+    rec=new SR(); rec.lang=el.lang.value; rec.continuous=true; rec.interimResults=true; rec.maxAlternatives=1;
+    rec.onstart=function(){setStatus("Listening. Start reading.","live")};
+    rec.onresult=function(ev){
+      if(paused)return;
+      var cur=[];
+      for(var i=ev.resultIndex;i<ev.results.length;i++){
+        var w=wordsOf(ev.results[i][0].transcript).map(norm).filter(Boolean);
+        if(ev.results[i].isFinal){finalTail=finalTail.concat(w).slice(-6)} else cur=cur.concat(w);
+      }
+      var tail=finalTail.concat(cur).slice(-5);
+      follow(tail);
+      setStatus("Heard: "+tail.join(" "),"live");
+    };
+    rec.onerror=function(ev){
+      if(ev.error==="not-allowed"||ev.error==="service-not-allowed"){
+        micDead=true; mode="fixed"; paused=true; $("bPause").textContent="Resume";
+        setStatus("Microphone blocked. Allow it in the browser's site settings, or press Resume to scroll at a fixed speed.","err");
+      }else if(ev.error==="network"){setStatus("Speech service unreachable. Check the internet connection.","err")}
+      else if(ev.error==="audio-capture"){setStatus("No microphone found.","err")}
+    };
+    rec.onend=function(){rec=null; if(active&&!paused&&mode==="voice"&&!micDead)setTimeout(startRec,250)};
+    rec.start();
+  }catch(e){setStatus("Could not start speech recognition.","err")}
+}
+function stopRec(){if(rec){var r=rec;rec=null;r.onend=null;try{r.abort()}catch(e){}}}
+
+/* ---------- controls ---------- */
+function goFull(){var s=el.stage;try{var p=(s.requestFullscreen||s.webkitRequestFullscreen||function(){}).call(s);if(p&&p.catch)p.catch(function(){})}catch(e){}}
+function start(){
+  build(); if(!M.length){el.script.focus();return}
+  if(mode==="voice"&&SR&&!micOK){askMic();return}
+  micDead=false; setMode(mode);
+  pos=0; shown=-1; finalTail=[]; samples=[]; paused=false; active=true;
+  fontVw=parseFloat(el.size.value)||6.5; applyFont();
+  el.view.classList.toggle("mirror",el.mirror.checked);
+  $("setup").hidden=true; el.stage.hidden=false; $("bPause").textContent="Pause";
+  goFull();
+  try{if(navigator.wakeLock)navigator.wakeLock.request("screen").then(function(l){lock=l}).catch(function(){})}catch(e){}
+  y=lineY(); last=performance.now(); raf=requestAnimationFrame(frame);
+  if(mode==="voice")startRec(); else setStatus("Fixed speed. Space pauses.","");
+}
+function exit(){
+  active=false; cancelAnimationFrame(raf); stopRec();
+  if(document.fullscreenElement){try{document.exitFullscreen()}catch(e){}}
+  if(lock){try{lock.release()}catch(e){} lock=null}
+  el.stage.hidden=true; $("setup").hidden=false;
+}
+function togglePause(){
+  paused=!paused; $("bPause").textContent=paused?"Resume":"Pause"; samples=[];
+  if(mode==="voice"){ if(paused){stopRec();setStatus("Paused.","")} else {finalTail=[];startRec()} }
+  else setStatus(paused?"Paused.":"Fixed speed. Space pauses.","");
+}
+function nudge(n){pos=Math.max(0,Math.min(M.length,Math.floor(pos)+n));finalTail=[];samples=[]}
+function resize(d){fontVw=Math.max(3,Math.min(12,fontVw+d));applyFont()}
+
+$("start").addEventListener("click",start);
+$("bExit").addEventListener("click",exit);
+$("bPause").addEventListener("click",togglePause);
+$("bBack").addEventListener("click",function(){nudge(-8)});
+$("bFwd").addEventListener("click",function(){nudge(8)});
+$("bSmall").addEventListener("click",function(){resize(-.5)});
+$("bBig").addEventListener("click",function(){resize(.5)});
+$("bTop").addEventListener("click",function(){nudge(-1e9)});
+$("bFull").addEventListener("click",function(){document.fullscreenElement?document.exitFullscreen():goFull()});
+el.roll.addEventListener("click",function(e){var m=e.target.dataset&&e.target.dataset.m;if(m!==undefined){pos=+m;finalTail=[];samples=[]}});
+document.addEventListener("keydown",function(e){
+  if(!active)return;
+  var k=e.key;
+  if(k===" "){e.preventDefault();togglePause()}
+  else if(k==="ArrowUp"){e.preventDefault();nudge(-8)}
+  else if(k==="ArrowDown"){e.preventDefault();nudge(8)}
+  else if(k==="+"||k==="="){resize(.5)}
+  else if(k==="-"||k==="_"){resize(-.5)}
+  else if(k==="Escape"&&!document.fullscreenElement){exit()}
+});
+})();
+</script>
+</body>
+</html>
